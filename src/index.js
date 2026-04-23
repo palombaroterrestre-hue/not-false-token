@@ -1,4 +1,3 @@
-import OpenSea from "opensea-js";
 import { ethers } from "ethers";
 import dotenv from "dotenv";
 import axios from "axios";
