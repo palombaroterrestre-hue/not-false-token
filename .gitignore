@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.local
+temp_nft.png
+*.png
+artifacts/
+cache/
+typechain-types/
+deployments/
+broadcast/
