@@ -1,3 +1,4 @@
+import OpenSea from "opensea-js";
 import axios from "axios";
 import dotenv from "dotenv";
 
@@ -6,52 +7,72 @@ dotenv.config();
 export class OpenSeaService {
   constructor() {
     this.apiKey = process.env.OPENSEA_API_KEY;
-    this.baseUrl = "https://api.opensea.io/api/v2";
+    this.contractAddress = process.env.CONTRACT_ADDRESS;
   }
 
-  async listNFT(tokenId, contractAddress, priceEth = "0.01") {
+  async listNFT(tokenId, contractAddress, price = "0.01") {
+    if (!this.apiKey || this.apiKey === "your_opensea_api_key") {
+      console.log("⏩ OpenSea API key non configurata");
+      return null;
+    }
+
+    const provider = new (await import("ethers")).JsonRpcProvider(process.env.RPC_URL);
+    const wallet = new (await import("ethers")).Wallet(process.env.PRIVATE_KEY, provider);
+    const owner = wallet.address;
+
+    console.log(`Listing NFT #${tokenId} su OpenSea per ${price} ETH...`);
+
     try {
-      console.log(`Messa in vendita NFT #${tokenId} su OpenSea...`);
-      
-      if (!this.apiKey || this.apiKey === "your_opensea_api_key") {
-        console.log("OpenSea API key non configurata. Skip listing.");
-        console.log("Per abilitare: aggiungi OPENSEA_API_KEY nel .env");
-        console.log("Oppure vendi manualmente su OpenSea.");
-        return null;
-      }
+      const priceWei = (BigInt(parseFloat(price) * 1e18)).toString();
 
       const response = await axios.post(
-        `${this.baseUrl}/listings`,
+        "https://api.opensea.io/v2/listings",
         {
           asset: {
             token_id: tokenId.toString(),
-            token_address: contractAddress,
-            chain: "matic",
+            token_address: contractAddress || this.contractAddress,
+            chain: "matic"
           },
-          start_amount: priceEth,
-          currency: {
-            address: "0x0000000000000000000000000000000000000000",
-            decimals: 18,
-            name: "MATIC",
-            symbol: "MATIC",
-          },
-          protocol: "seaport",
+          start_amount: price,
+          currency: "0x0000000000000000000000000000000000000000",
+          protocol_data: {
+            offerer: owner,
+            zone: "0x0000000000000000000000000000000000000000",
+            salt: Math.floor(Math.random() * 1e12).toString(),
+            start_time: Math.floor(Date.now() / 1000),
+            end_time: Math.floor(Date.now() / 1000) + 86400 * 30,
+            offer: [{
+              item_type: 2,
+              token: contractAddress || this.contractAddress,
+              identifier_or_criteria: tokenId.toString(),
+              start_amount: priceWei,
+              end_amount: priceWei
+            }],
+            consideration: [{
+              item_type: 2,
+              token: contractAddress || this.contractAddress,
+              identifier_or_criteria: tokenId.toString(),
+              start_amount: priceWei,
+              end_amount: priceWei,
+              recipient: owner
+            }],
+            counter: 0
+          }
         },
         {
           headers: {
-            "Authorization": `Bearer ${this.apiKey}`,
+            "Authorization": this.apiKey,
             "Content-Type": "application/json",
-            "X-API-KEY": this.apiKey,
-          },
+            "X-API-KEY": this.apiKey
+          }
         }
       );
 
-      console.log(`Lista creata: ${response.data.response}`);
-      console.log(`Prezzo: ${priceEth} ETH`);
+      console.log(`✅ NFT #${tokenId} listato su OpenSea!`);
+      console.log(`   Link: https://opensea.io/assets/matic/${contractAddress || this.contractAddress}/${tokenId}`);
       return response.data;
     } catch (error) {
-      console.log("Errore listing OpenSea:", error.response?.data?.message || error.message);
-      console.log("NFT mintato. Vendilo manualmente su OpenSea dopo.");
+      console.log(`⚠️ Errore listing: ${error.response?.data?.error?.message || error.message}`);
       return null;
     }
   }

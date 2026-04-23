@@ -1,77 +1,117 @@
-import cron from 'node-cron';
-import { TrendAgent } from './agent/trendAgent.js';
-import { NFTGenerator } from './agent/nftGenerator.js';
-import { IPFSService } from './blockchain/ipfsService.js';
-import { NFTMinter } from './blockchain/minter.js';
-import { OpenSeaService } from './blockchain/openseaService.js';
-import dotenv from 'dotenv';
-import fs from 'fs';
+import OpenSea from "opensea-js";
+import { ethers } from "ethers";
+import dotenv from "dotenv";
+import axios from "axios";
+import fs from "fs";
+import path from "path";
 
 dotenv.config();
 
-const trendAgent = new TrendAgent();
-const nftGenerator = new NFTGenerator();
-const ipfsService = new IPFSService();
-const nftMinter = new NFTMinter();
-const openseaService = new OpenSeaService();
+const API_KEY = process.env.OPENSEA_API_KEY;
+const RPC_URL = process.env.RPC_URL;
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 
-async function runDailyTask() {
+const ABI = [
+  "function mintNFT(address recipient, string memory tokenURI) public returns (uint256)"
+];
+
+async function listOnOpenSea(tokenId, priceEth = "0.01") {
+  const owner = new ethers.Wallet(PRIVATE_KEY);
+  const priceWei = ethers.parseEther(priceEth);
+
   try {
-    console.log('--- Inizio Task Giornaliero ---');
+    const response = await axios.post(
+      "https://api.opensea.io/v2/listings",
+      {
+        asset: {
+          token_id: tokenId.toString(),
+          token_address: CONTRACT_ADDRESS,
+          chain: "matic"
+        },
+        start_amount: priceEth,
+        currency: "0x0000000000000000000000000000000000000000",
+        protocol_data: {
+          offerer: owner.address,
+          zone: "0x0000000000000000000000000000000000000000",
+          salt: Math.floor(Math.random() * 1e12).toString(),
+          start_time: Math.floor(Date.now() / 1000),
+          end_time: Math.floor(Date.now() / 1000) + 86400 * 30,
+          offer: [{
+            item_type: 2,
+            token: CONTRACT_ADDRESS,
+            identifier_or_criteria: tokenId.toString(),
+            start_amount: priceWei.toString(),
+            end_amount: priceWei.toString()
+          }],
+          consideration: [{
+            item_type: 2,
+            token: CONTRACT_ADDRESS,
+            identifier_or_criteria: tokenId.toString(),
+            start_amount: priceWei.toString(),
+            end_amount: priceWei.toString(),
+            recipient: owner.address
+          }],
+          counter: 0
+        }
+      },
+      {
+        headers: {
+          "Authorization": API_KEY,
+          "Content-Type": "application/json",
+          "X-API-KEY": API_KEY
+        }
+      }
+    );
 
-    // 1. Monitoraggio Trend
-    const trendData = await trendAgent.getLatestTrend();
-
-    // 2. Generazione Immagine
-    const imagePath = await nftGenerator.generateImage(trendData.prompt, trendData.trend);
-
-    // 3. Caricamento su IPFS
-    console.log('Caricamento immagine su IPFS...');
-    const imageHash = await ipfsService.uploadImage(imagePath);
-    const imageUrl = `ipfs://${imageHash}`;
-
-    // 4. Creazione Metadata
-    const metadata = {
-      name: `Trend NFT: ${trendData.trend}`,
-      description: trendData.description,
-      image: imageUrl,
-      attributes: [
-        { trait_type: "Trend", value: trendData.trend },
-        { trait_type: "Data", value: new Date().toISOString() }
-      ]
-    };
-
-    console.log('Caricamento metadata su IPFS...');
-    const metadataHash = await ipfsService.uploadMetadata(metadata);
-    const tokenURI = `ipfs://${metadataHash}`;
-
-    // 5. Minting
-    const walletAddress = await nftMinter.getOwnerAddress();
-    const receipt = await nftMinter.mint(walletAddress, tokenURI);
-    
-    // Recupera tokenId dal receipt (semplificato)
-    // In un caso reale, estrarremmo il tokenId dai logs
-    const tokenId = 1; // Placeholder
-
-    // 6. Messa in vendita su OpenSea
-    await openseaService.listNFT(tokenId, process.env.CONTRACT_ADDRESS);
-
-    // Pulizia
-    if (fs.existsSync(imagePath)) {
-      fs.unlinkSync(imagePath);
-    }
-
-    console.log('--- Task Giornaliero Completato con Successo ---');
+    console.log(`✅ NFT #${tokenId} listed on OpenSea for ${priceEth} ETH`);
+    return response.data;
   } catch (error) {
-    console.error('Errore nel task giornaliero:', error);
+    console.log(`⚠️ Listing NFT #${tokenId}: ${error.response?.data?.error?.message || error.message}`);
+    return null;
   }
 }
 
-// Schedula il task per ogni giorno a mezzanotte
-cron.schedule('0 0 * * *', () => {
-  console.log('Esecuzione task programmato...');
-  runDailyTask();
-});
+async function main() {
+  console.log("--- Inizio Task Giornaliero ---");
 
-// Esegui subito al primo avvio (opzionale)
-runDailyTask();
+  const trendAgent = (await import("./src/agent/trendAgent.js")).TrendAgent;
+  const nftGenerator = (await import("./src/agent/nftGenerator.js")).NFTGenerator;
+  const ipfsService = (await import("./src/blockchain/ipfsService.js")).IPFSService;
+
+  const trendData = await new trendAgent().getLatestTrend();
+  console.log(`Trend: ${trendData.trend}`);
+
+  const imagePath = await new nftGenerator().generateImage(trendData.prompt, trendData.trend);
+  
+  const imageHash = await new ipfsService().uploadImage(imagePath);
+  const metadataHash = await new ipfsService().uploadMetadata({
+    name: `Trend NFT: ${trendData.trend}`,
+    description: trendData.description,
+    image: `ipfs://${imageHash}`,
+    attributes: [
+      { trait_type: "Trend", value: trendData.trend },
+      { trait_type: "Data", value: new Date().toISOString() }
+    ]
+  });
+
+  const provider = new ethers.JsonRpcProvider(RPC_URL);
+  const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+  const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
+
+  const tx = await contract.mintNFT(wallet.address, `ipfs://${metadataHash}`);
+  await tx.wait();
+  
+  const tokenId = 1;
+
+  if (API_KEY) {
+    await listOnOpenSea(tokenId, "0.01");
+  } else {
+    console.log("⏩ OpenSea API key non configurata - NFT mintato ma non listato");
+  }
+
+  if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+  console.log("--- Task Completato ---");
+}
+
+main().catch(console.error);

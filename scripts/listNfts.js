@@ -1,69 +1,83 @@
-import pkg from "hardhat";
-const { ethers } = pkg;
 import dotenv from "dotenv";
 import axios from "axios";
 
 dotenv.config();
 
-async function listNFTs() {
-  const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-  const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-  const contractAddress = process.env.CONTRACT_ADDRESS;
-  const apiKey = process.env.OPENSEA_API_KEY;
+const API_KEY = process.env.OPENSEA_API_KEY;
+const CONTRACT = process.env.CONTRACT_ADDRESS;
+const OWNER = "0xEaEf7b52382683f685aF19d4c36A504079d828A5";
 
-  console.log("Checking NFT ownership...");
+async function createListing(tokenId, pricematic = "0.01") {
+  console.log(`Listing NFT #${tokenId}...`);
 
-  const contract = new ethers.Contract(
-    contractAddress,
-    [
-      "function ownerOf(uint256) view returns (address)",
-      "function tokenURI(uint256) view returns (string)",
-      "function totalSupply() view returns (uint256)",
-      "function balanceOf(address) view returns (uint256)"
-    ],
-    wallet
-  );
+  const priceWei = (parseFloat(pricematic) * 1e18).toString();
 
-  const balance = await contract.balanceOf(wallet.address);
-  console.log(`NFTs in wallet: ${balance.toString()}`);
-
-  const baseUrl = "https://api.opensea.io/api/v2/listings";
-
-  for (let i = 0; i < balance; i++) {
-    try {
-      console.log(`\nListing NFT #${i}...`);
-
-      const response = await axios.post(
-        baseUrl,
-        {
-          asset: {
-            token_id: i.toString(),
-            token_address: contractAddress,
-            chain: "matic",
-          },
-          start_amount: 0.01,
-          currency: {
-            address: "0x0000000000000000000000000000000000000000",
-            decimals: 18,
-            name: "MATIC",
-            symbol: "MATIC",
-          },
-          protocol: "seaport",
+  try {
+    const response = await axios.post(
+      `https://api.opensea.io/v2/listings`,
+      {
+        asset: {
+          token_id: tokenId,
+          token_address: CONTRACT,
+          chain: "matic"
         },
-        {
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-            "X-API-KEY": apiKey,
-          },
+        start_amount: pricematic,
+        currency: {
+          address: "0x0000000000000000000000000000000000000000",
+          decimals: 18,
+          name: "MATIC",
+          symbol: "MATIC"
+        },
+        protocol_data: {
+          offerer: OWNER,
+          zone: "0x0000000000000000000000000000000000000000",
+          salt: Math.floor(Math.random() * 1e12).toString(),
+          start_time: Math.floor(Date.now() / 1000),
+          end_time: Math.floor(Date.now() / 1000) + 86400 * 30,
+          offer: [{
+            item_type: 2,
+            token: CONTRACT,
+            identifier_or_criteria: tokenId.toString(),
+            start_amount: priceWei,
+            end_amount: priceWei
+          }],
+          consideration: [{
+            item_type: 2,
+            token: CONTRACT,
+            identifier_or_criteria: tokenId.toString(),
+            start_amount: priceWei,
+            end_amount: priceWei,
+            recipient: OWNER
+          }],
+          counter: 0
         }
-      );
+      },
+      {
+        headers: {
+          "Authorization": API_KEY,
+          "Content-Type": "application/json",
+          "X-API-KEY": API_KEY
+        }
+      }
+    );
 
-      console.log(`NFT #${i} listed! Response:`, response.data);
-    } catch (error) {
-      console.log(`Error listing NFT #${i}:`, error.response?.data?.message || error.message);
-    }
+    console.log(`✅ NFT #${tokenId} listed!`);
+    return response.data;
+  } catch (error) {
+    console.log(`❌ NFT #${tokenId}: ${error.response?.data?.error?.message || error.message}`);
+    return null;
   }
 }
 
-listNFTs().catch(console.error);
+async function main() {
+  console.log(`Contract: ${CONTRACT}`);
+  console.log(`Owner: ${OWNER}`);
+  console.log("");
+
+  for (let i = 0; i < 2; i++) {
+    await createListing(i.toString(), "0.01");
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+main();
